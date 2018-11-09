@@ -7,19 +7,22 @@ class MockMemory()(implicit conf: MemoryParameters) extends Module {
     val mem = new MemIO().flip
   })
   val memoryLines = scala.math.pow(2, conf.memIF.addrBits)
-  val backingMemory = Mem(Bits(width = conf.memIF.dataBits*conf.memIF.dataBeats), 2048)
+  val backingMemory = Mem(Bits(width = conf.memIF.dataBits), 2048)
   
 
-  val readAddr = io.mem.req_cmd.bits.addr
-  val writeAddr = io.mem.req_cmd.bits.addr
+  val addr = Reg(init = UInt(0,width = log2Up(2048)))
 
-  val writeData = Wire(Bits(0))
+  when(io.mem.req_cmd.valid){
+    addr := io.mem.req_cmd.bits.addr
+  }
+
+  val writeData = Wire(Bits(width = conf.memIF.dataBits))
   val writeEn = Wire(Bool())
   writeEn := Bool(false)
 
-  val readData = backingMemory.read(readAddr)
+  val readData = backingMemory.read(addr)
   when(writeEn){
-    backingMemory.write(writeAddr, writeData)
+    backingMemory.write(addr, writeData)
   }
 
   val receiveWriteData = Wire(Bool())
@@ -51,28 +54,28 @@ class MockMemory()(implicit conf: MemoryParameters) extends Module {
     }
   }.elsewhen(currentState === read0){
     io.mem.resp.bits.tag := io.mem.req_cmd.bits.tag
-    io.mem.resp.bits.data := readData(conf.memIF.dataBits - 1, 0)
+    io.mem.resp.bits.data := readData(conf.memIF.dataBits /4 - 1, 0)
     io.mem.resp.valid := Bool(true)
     when(io.mem.resp.ready){
       currentState := read1
     }
   }.elsewhen(currentState === read1){
     io.mem.resp.bits.tag := io.mem.req_cmd.bits.tag
-    io.mem.resp.bits.data := readData(conf.memIF.dataBits*2 - 1, conf.memIF.dataBits)
+    io.mem.resp.bits.data := readData(conf.memIF.dataBits*2 /4 - 1, conf.memIF.dataBits /4)
     io.mem.resp.valid := Bool(true)
     when(io.mem.resp.ready){
       currentState := read2
     }
   }.elsewhen(currentState === read2){
     io.mem.resp.bits.tag := io.mem.req_cmd.bits.tag
-    io.mem.resp.bits.data := readData(conf.memIF.dataBits*3 - 1, conf.memIF.dataBits*2)
+    io.mem.resp.bits.data := readData(conf.memIF.dataBits*3 /4 - 1, conf.memIF.dataBits*2 /4)
     io.mem.resp.valid := Bool(true)
     when(io.mem.resp.ready){
       currentState := read3
     }
   }.elsewhen(currentState === read3){
     io.mem.resp.bits.tag := io.mem.req_cmd.bits.tag
-    io.mem.resp.bits.data := readData(conf.memIF.dataBits*4 - 1, conf.memIF.dataBits*3)
+    io.mem.resp.bits.data := readData(conf.memIF.dataBits*4 /4 - 1, conf.memIF.dataBits*3 /4)
     io.mem.resp.valid := Bool(true)
     when(io.mem.resp.ready){
       io.mem.req_cmd.ready := Bool(true)

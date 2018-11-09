@@ -7,10 +7,10 @@ class DRAMModelToCtrlFSMIO()(implicit val conf: MemoryParameters) extends Bundle
   val writeAddr = UInt()
   val doRead = Bool()
   val doWrite = Bool()
-  val writeData = Vec(conf.deviceWidth, UInt(width = conf.memIF.dataBits))
+  val writeData = Vec(conf.deviceWidth, UInt(width = conf.memIF.dataBits / 4))
   val readData = new Bundle {
     val valid = Bool().flip()
-    val data = Vec(conf.deviceWidth, UInt(width = conf.memIF.dataBits)).flip()
+    val data = Vec(conf.deviceWidth, UInt(width = conf.memIF.dataBits /4)).flip()
   }
   val fireTgtCycle = Bool().flip
 }
@@ -142,23 +142,16 @@ class DRAMTimingModel(implicit val conf: MemoryParameters) extends Module{
     io.memController.readDataBus.valid := readDataValidShiftRegs(conf.memConst.tCL + conf.memConst.BURST_LENGTH - 2)
 
     io.memController.readDataBus.data := readDataShiftRegs(conf.memConst.tCL + conf.memConst.BURST_LENGTH - 2)
+
     //writeData delay chain
+    val writeData = Reg(init = UInt(0, width = conf.memIF.dataBits))
+
+    when(io.memController.writeDataBus.valid){
+      writeData := io.memController.writeDataBus.data
+    }
     if (conf.memConst.BURST_LENGTH - 1 > 0) {
-      val writeDataShiftRegs = Vec.fill(conf.memConst.BURST_LENGTH - 1) {
-        Reg(init = Bits(0))
-      }
-      var writeData = io.memController.writeDataBus.data
-      for (i <- 0 until conf.memConst.BURST_LENGTH - 1) {
-        writeData = Cat(writeDataShiftRegs(i), writeData)
-      }
-      for (i <- 0 until conf.deviceWidth) {
-        io.ctrlFSM.writeData(i) := writeData((i + 1) * conf.memIF.dataBits - 1, i * conf.memIF.dataBits)
-      }
-      when(io.ctrlFSM.fireTgtCycle) {
-        writeDataShiftRegs(0) := io.memController.writeDataBus.data
-        for (i <- 1 until conf.memConst.BURST_LENGTH - 1) {
-          writeDataShiftRegs(i) := writeDataShiftRegs(i - 1)
-        }
+      for (i <- 0 until 4) {
+        io.ctrlFSM.writeData(i) := writeData((i + 1) * conf.memIF.dataBits /4 - 1, i * conf.memIF.dataBits/4)
       }
     } else {
       for (i <- 0 until conf.deviceWidth) {
@@ -166,43 +159,31 @@ class DRAMTimingModel(implicit val conf: MemoryParameters) extends Module{
       }
     }
     //doWrite and writeAddr delay chain
-    val expectReceiveWriteData = Wire(Bool())
-    if (conf.memConst.tWL + conf.memConst.BURST_LENGTH - 1 > 0) {
-      val doWriteShiftRegs = Vec.fill(conf.memConst.tWL + conf.memConst.BURST_LENGTH - 1) {
-        Reg(init = Bool(false))
-      }
-      val writeAddrShiftRegs = Vec.fill(conf.memConst.tWL + conf.memConst.BURST_LENGTH - 1) {
-        Reg(init = UInt(0))
-      }
-      io.ctrlFSM.doWrite := doWriteShiftRegs(conf.memConst.tWL + conf.memConst.BURST_LENGTH - 1 - 1)
-      io.ctrlFSM.writeAddr := writeAddrShiftRegs(conf.memConst.tWL + conf.memConst.BURST_LENGTH - 1 - 1)
-      when(io.ctrlFSM.fireTgtCycle) {
-        doWriteShiftRegs(0) := io.memController.cmdBus.cmd === conf.memConst.write_cmd & io.memController.cmdBus.valid
-        if (conf.addrOffsetWidth > 0) {
-          writeAddrShiftRegs(0) := Cat(io.memController.cmdBus.bankAddr, rowAddr, io.memController.cmdBus.colAddr, UInt(0, width = conf.addrOffsetWidth))
-        } else {
-          writeAddrShiftRegs(0) := Cat(io.memController.cmdBus.bankAddr, rowAddr, io.memController.cmdBus.colAddr)
-        }
-        for (i <- 1 until conf.memConst.tWL + conf.memConst.BURST_LENGTH - 1) {
-          doWriteShiftRegs(i) := doWriteShiftRegs(i - 1)
-          writeAddrShiftRegs(i) := writeAddrShiftRegs(i - 1)
-        }
-      }
-      expectReceiveWriteData := doWriteShiftRegs(conf.memConst.tWL - 1)
-    } else {
-      //this case is not possible right now since we force tWL >= 1 and BURST_LENGTH >= 1, but we might add support in the future
-      io.ctrlFSM.doWrite := io.memController.cmdBus.cmd === conf.memConst.write_cmd & io.memController.cmdBus.valid
-      if (conf.addrOffsetWidth > 0) {
-        io.ctrlFSM.writeAddr := Cat(io.memController.cmdBus.bankAddr, rowAddr, io.memController.cmdBus.colAddr, UInt(0, width = conf.addrOffsetWidth))
-      } else {
-        io.ctrlFSM.writeAddr := Cat(io.memController.cmdBus.bankAddr, rowAddr, io.memController.cmdBus.colAddr)
-      }
-      expectReceiveWriteData := io.memController.cmdBus.cmd === conf.memConst.write_cmd & io.memController.cmdBus.valid
+    val expectReceiveWriteData = Reg(init = Bool(false))
+
+    val doWriteAddr = Wire(UInt(conf.memIF.addrBits))
+    val doWrite = io.memController.cmdBus.cmd === conf.memConst.write_cmd & io.memController.cmdBus.valid
+
+    if(conf.addrOffsetWidth >0){
+      doWriteAddr := Cat(io.memController.cmdBus.bankAddr, rowAddr, io.memController.cmdBus.colAddr, UInt(0, width = conf.addrOffsetWidth))
+    } else{
+      doWriteAddr := Cat(io.memController.cmdBus.bankAddr, rowAddr, io.memController.cmdBus.colAddr)
     }
+      val doWriteAddrTwl = ShiftRegister(doWriteAddr, conf.memConst.tWL -1 )
+      val doWriteTwl = ShiftRegister(doWrite, conf.memConst.tWL -1 )
+
+      io.ctrlFSM.doWrite := doWriteTwl
+      io.ctrlFSM.writeAddr := doWriteAddrTwl
+
+      when(io.ctrlFSM.fireTgtCycle & io.memController.cmdBus.valid){
+        expectReceiveWriteData := Bool(true)
+      }.elsewhen(io.memController.writeDataBus.valid){
+        expectReceiveWriteData := Bool(false)
+      }
 
     val tWL_violation = Reg(init = Bool(false))
     when(io.ctrlFSM.fireTgtCycle) {
-      tWL_violation := (expectReceiveWriteData & ~io.memController.writeDataBus.valid) | tWL_violation
+      tWL_violation := (doWriteTwl &&  ~io.memController.writeDataBus.valid) | tWL_violation
     }
     io.errors.tWL_violation := tWL_violation
 }

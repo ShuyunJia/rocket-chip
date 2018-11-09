@@ -140,7 +140,7 @@ class AXI4DDR(
     minLatency = 1)))
 
   //val mif = MemoryParameters(memIF = MemoryIFConfiguration(log2Up(node.portParams(0).maxAddress), node.portParams(0).beatBytes * 8 / 4, log2Up(node.portParams(0).maxTransfer) + 2 , 4))
-  val mif = MemoryParameters(memIF = MemoryIFConfiguration(32, node.portParams(0).beatBytes * 8 / 4, log2Up(node.portParams(0).maxTransfer) + 3 , 4))
+  val mif = MemoryParameters(memIF = MemoryIFConfiguration(32, node.portParams(0).beatBytes * 8, log2Up(node.portParams(0).maxTransfer) + 3 , 4))
   println(s"#######datawidth = "+mif.memIF.dataBits)
   println(s"node maxAddress = "+node.portParams(0).maxAddress)
   println(s"node beatBytes = "+node.portParams(0).beatBytes)
@@ -169,10 +169,10 @@ class AXI4DDR(
     val cmdSplit = Wire(Decoupled(new MemReqCmd))
     val cmd = Queue(cmdSplit, 16)
 
-    val rdataSplit = Wire(Decoupled(new BusData(in.params.dataBits, in.params.idBits + (1 max in.params.userBits))))
-    val rdata = Queue(rdataSplit, 8)
-    val wdataSplit = Wire(Decoupled(new BusData(in.params.dataBits / 4, in.params.idBits + (1 max in.params.userBits))))
-    val wdata = Queue(wdataSplit, 8)
+    val rdata = Wire(Decoupled(new BusData(in.params.dataBits, in.params.idBits + (1 max in.params.userBits))))
+    val rdataQueue = Queue(rdata, 8)
+    val wdata = Wire(Decoupled(new BusData(in.params.dataBits, in.params.idBits + (1 max in.params.userBits))))
+    val wdataQueue = Queue(wdata, 8)
     val ar_user = Wire(UInt(width = 1 max in.params.userBits))
     val aw_user = Wire(UInt(width = 1 max in.params.userBits))
 
@@ -180,66 +180,17 @@ class AXI4DDR(
     in.aw.bits.user.foreach{aw_user := _}
 
     cmdSplit.valid := in.ar.valid || in.aw.valid
-    cmdSplit.bits.addr := in.ar.bits.addr
-    cmdSplit.bits.rw := in.aw.valid
+    cmdSplit.bits.addr := Mux(in.ar.fire(), in.ar.bits.addr, in.aw.bits.addr)
+    cmdSplit.bits.rw := in.aw.fire()
     cmdSplit.bits.tag := Mux(in.ar.valid, ar_user ## in.ar.bits.id, aw_user ## in.aw.bits.id)
 
     mem.module.io.memReqCmd <> cmd
-    mem.module.io.memReqData <> wdata
-    //rdataSplit <> mem.module.io.memResp
+    mem.module.io.memReqData <> wdataQueue
+    rdata <> mem.module.io.memResp
 
-    val wdataReg = Reg(init = UInt(0, width = in.params.dataBits))
-    val idle :: enq1 :: enq2 :: enq3 :: Nil = Enum(UInt(), 4)
-    val currStateWr = Reg(init = idle)
-    val nextStateWr = Wire(UInt())
-    nextStateWr := currStateWr
-    currStateWr := nextStateWr
-
-    wdataSplit.valid := Bool(false)
-    when(in.w.fire() && currStateWr === idle && wdataSplit.ready){
-      wdataReg := in.w.bits.data
-      wdataSplit.bits.data := in.w.bits.data(in.params.dataBits/4 - 1, 0)
-      wdataSplit.valid := Bool(true)
-      nextStateWr := enq1
-    }.elsewhen(currStateWr === enq1 && wdataSplit.ready){
-      wdataSplit.bits.data := wdataReg(in.params.dataBits/2 -1 , in.params.dataBits/4)
-      wdataSplit.valid := Bool(true)
-      nextStateWr := enq2
-    }.elsewhen(currStateWr === enq2 && wdataSplit.ready){
-      wdataSplit.bits.data := wdataReg(in.params.dataBits * 3 /4 -1 , in.params.dataBits/2)
-      wdataSplit.valid := Bool(true)
-      nextStateWr := enq3
-    }.elsewhen(currStateWr === enq3 && wdataSplit.ready){
-      wdataSplit.bits.data := wdataReg(in.params.dataBits -1 , in.params.dataBits * 3 /4)
-      wdataSplit.valid := Bool(true)
-      nextStateWr := idle
-    }
-
-    val rdata0 = Reg(init = UInt(0, width = in.params.dataBits / 4))
-    val rdata1 = Reg(init = UInt(0, width = in.params.dataBits / 4))
-    val rdata2 = Reg(init = UInt(0, width = in.params.dataBits / 4))
-    val currStateRd = Reg(init = idle)
-    val nextStateRd = Wire(UInt())
-    nextStateRd := currStateRd
-    currStateRd := nextStateRd
-
-    rdataSplit.valid := Bool(false)
-
-    when(mem.module.io.memResp.fire() && currStateRd === idle){
-      rdata0 := mem.module.io.memResp.bits.data
-      nextStateRd := enq1
-    }.elsewhen(mem.module.io.memResp.fire() && currStateRd === enq1){
-      rdata1 := mem.module.io.memResp.bits.data
-      nextStateRd := enq2
-    }.elsewhen(mem.module.io.memResp.fire() && currStateRd === enq2){
-      rdata2 := mem.module.io.memResp.bits.data
-      nextStateRd := enq3
-    }.elsewhen(mem.module.io.memResp.fire() && currStateRd === enq3){
-      rdataSplit.bits.data := Cat(mem.module.io.memResp.bits.data, rdata2, rdata1, rdata0)
-      rdataSplit.valid := Bool(true)
-      rdataSplit.bits.tag := mem.module.io.memResp.bits.tag
-      nextStateRd := idle
-    }
+    wdata.valid := in.w.valid
+    wdata.bits.data := in.w.bits.data
+    rdataQueue.ready := in.r.ready
 
     mem.module.io.params.tRAS := UInt(4)
     mem.module.io.params.tRP := UInt(4)
@@ -258,13 +209,12 @@ class AXI4DDR(
     mem.module.io.memResp.ready := in.r.ready
     in.ar.ready := cmdSplit.ready
     in.aw.ready := cmdSplit.ready
-    in.w.ready := wdataSplit.ready && currStateWr === idle
+    in.w.ready := wdata.ready
 
     in.b.valid := cmd.fire() & cmd.bits.rw
     in.b.bits.id := cmd.bits.tag(in.params.idBits -1 ,0)
     in.b.bits.resp := UInt(0)
     in.b.bits.user.foreach { _ := cmd.bits.tag(in.params.idBits) }
-    rdata.ready := in.r.ready
     in.r.valid := rdata.valid
     in.r.bits.id   := rdata.bits.tag(in.params.idBits-1 ,0 )
     in.r.bits.resp := UInt(0)

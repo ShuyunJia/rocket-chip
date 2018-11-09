@@ -3,7 +3,7 @@ package freechips.rocketchip.DRAMModel
 import Chisel._
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.config._
-
+/*
 class DRAMModel(config: MemoryParameters) extends Module {
   implicit val conf = config
   val io = IO(new Bundle{
@@ -24,6 +24,7 @@ class DRAMModel(config: MemoryParameters) extends Module {
 
   io.mem.req_cmd.ready := Bool(true)
 }
+*/
 
 class DRAMSystem(config: MemoryParameters)(implicit p : Parameters) extends LazyModule {
     implicit val conf = config
@@ -62,7 +63,7 @@ class DRAMSystem(config: MemoryParameters)(implicit p : Parameters) extends Lazy
       memController.io.mem_data_queue.valid := io.memReqData.valid
       memController.io.mem_data_queue.bits := io.memReqData.bits
       io.memReqData.ready := memController.io.mem_data_queue.ready //&& fireTgtClk
-      io.memResp.valid := memController.io.mem_resp_queue.valid //&& fireTgtClk
+      io.memResp.valid := memController.io.mem_resp_queue.valid && fireTgtClk
       io.memResp.bits.tag := memController.io.mem_resp_queue.bits.tag
       io.memResp.bits.data := memController.io.mem_resp_queue.bits.data
       memController.io.mem_resp_queue.ready := io.memResp.ready
@@ -136,9 +137,9 @@ class DRAMSystem(config: MemoryParameters)(implicit p : Parameters) extends Lazy
           next_state := wait_for_read_data3
         }
       }.elsewhen(current_state === wait_for_read_data3) {
-        when(io.mem.resp.valid && io.memResp.ready) {
+        when(io.mem.resp.valid) {
           io.mem.resp.ready := Bool(true)
-          fireTgtClk := io.memResp.ready
+          fireTgtClk := io.mem.resp.ready
           executeTgtCycle := Bool(true)
           DRAMModel.io.ctrlFSM.readData.valid := Bool(true)
           next_state := executeTgtCycle1

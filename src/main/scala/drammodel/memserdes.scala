@@ -28,10 +28,19 @@ class MemData(implicit val conf: MemoryParameters) extends Bundle{
   val data = Bits(width = conf.memIF.dataBits)
 }
 
+class DieData(implicit val conf: MemoryParameters) extends Bundle{
+  val data = Bits(width = conf.memIF.dataBits/4)
+}
+
+class DieResp(implicit val conf: MemoryParameters) extends Bundle{
+  val data = Bits(width = conf.memIF.dataBits/4)
+  val tag = UInt(width = conf.memIF.tagBits)
+}
+
 class MemIO(implicit val conf: MemoryParameters) extends Bundle {
   val req_cmd  = Decoupled(new MemReqCmd)
-  val req_data = Decoupled(new MemData)
-  val resp     = Decoupled(new MemResp).flip
+  val req_data = Decoupled(new DieData)
+  val resp     = Decoupled(new DieResp).flip
 }
 
 class MemPipeIO(implicit val conf: MemoryParameters) extends Bundle {
